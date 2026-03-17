@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>项目流程时间线生成器v1.0-lym</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif;}
+  body{padding:20px;background:#f7f7f7;}
+
+  /* 标题 */
+  .title{
+    margin-bottom:12px;
+    font-size:22px;
+    font-weight:bold;
+    color:#333;
+  }
+
+  /* 按钮组：放在标题下方、表格上方 */
+  .btn-group{
+    margin-bottom:16px;
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    align-items:center;
+  }
+  button{
+    padding:8px 16px;
+    border:none;
+    border-radius:4px;
+    cursor:pointer;
+    color:white;
+    font-size:14px;
+  }
+  .add-col{background:#00a800;}
+  .add-flow{background:#0078d7;}
+  .gen-chart{background:#ff6600;}
+  .del-col{background:#cc3333;}
+  .del-row{background:#cc3333;}
+  .export-btn{background:#663399;}
+
+  .export-options{
+    display:flex;
+    gap:10px;
+    align-items:center;
+    flex-wrap:wrap;
+    margin-left:10px;
+  }
+  .export-options select{
+    padding:6px 10px;
+    border:1px solid #ccc;
+    border-radius:4px;
+    font-size:14px;
+  }
+
+  /* 表格宽度 */
+  .edit-table{
+    width:85%;
+    border-collapse:collapse;
+    margin-bottom:20px;
+    background:white;
+    box-shadow:0 1px 3px rgba(0,0,0,0.1);
+  }
+  .edit-table th, .edit-table td{
+    border:1px solid #ccc;
+    padding:8px;
+    text-align:center;
+    min-width:90px;
+  }
+  .edit-table th{
+    background:#eee;
+    font-weight:bold;
+    font-size:12px;
+  }
+  .edit-table td{
+    font-size:12px;
+    cursor:pointer;
+  }
+  .edit-table .flow-row td:first-child{
+    background:#f0f8ff;
+    font-weight:bold;
+  }
+  .edit-table .type-row td:first-child{
+    background:#f5f5f5;
+    font-weight:bold;
+  }
+
+  /* 导出临时容器 */
+  .export-temp-container{
+    position: fixed;
+    top: 0;
+    left: -9999px;
+    background: white;
+    padding: 20px;
+    width: 90%;
+    z-index: 9999;
+    opacity: 1;
+  }
+</style>
+</head>
+<body>
+
+<!-- 标题 -->
+<div class="title">项目流程时间线生成器v1.0-lym</div>
+
+<!-- 所有按钮放在这里：标题下方、表格上方 -->
+<div class="btn-group">
+  <button class="add-col" onclick="addMilestoneCol()">添加里程碑列</button>
+  <button class="del-col" onclick="deleteMilestoneCol()">删除最后一列</button>
+  <button class="add-flow" onclick="addFlowRow()">添加流程行</button>
+  <button class="del-row" onclick="deleteFlowRow()">删除最后一行</button>
+  <button class="gen-chart" onclick="renderGantt()">生成甘特图</button>
+
+  <div class="export-options">
+    <select id="exportRange">
+      <option value="both">导出表格+甘特图</option>
+      <option value="chart" selected>仅导出甘特图</option>
+    </select>
+    <select id="exportFormat">
+      <option value="png">PNG格式</option>
+      <option value="jpg">JPG格式</option>
+    </select>
+    <button class="export-btn" onclick="exportAsImage()">📤导出图片</button>
+  </div>
+</div>
+
+<!-- 表格 -->
+<table class="edit-table" id="mainTable">
+  <thead>
+    <tr>
+      <th rowspan="2">项目/流程</th>
+    </tr>
+    <tr class="type-row"></tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<!-- 甘特图：宽度90% 和表格一致 -->
+<div id="chart" style="width:90%;height:300px;background:white;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.1);"></div>
+
+<!-- 导出用临时容器 -->
+<div class="export-temp-container" id="exportTempContainer"></div>
+
+<script>
+let myChart = null;
+const ROW_HEIGHT_INCREMENT = 80;
+
+function initEChart() {
+  if (!myChart) {
+    myChart = echarts.init(document.getElementById('chart'), null, { backgroundColor: 'white' });
+  }
+  return myChart;
+}
+
+function setChartDynamicHeight() {
+  const chartContainer = document.getElementById('chart');
+  const flowRows = document.querySelectorAll('.flow-row');
+  const rowCount = flowRows.length;
+  const dynamicHeight = 300 + (rowCount > 2 ? (rowCount - 2) * ROW_HEIGHT_INCREMENT : 0);
+  chartContainer.style.height = `${dynamicHeight}px`;
+  if (myChart) myChart.resize();
+}
+
+function initTable() {
+  const mainTable = document.getElementById('mainTable');
+  const theadTr1 = mainTable.querySelector('thead tr:first-child');
+  const theadTr2 = mainTable.querySelector('thead tr:last-child');
+  const tbody = mainTable.querySelector('tbody');
+
+  const defaultMilestones = [
+    {name: 'CKO', type: 'normal'},{name: 'PCL Exit', type: 'normal'},{name: 'ID fix', type: 'normal'},
+    {name: 'PEL Entry', type: 'normal'},{name: 'PEL Exit', type: 'normal'},{name: 'POR Exit', type: 'normal'},
+    {name: 'Tooling', type: 'normal'},{name: 'EVB', type: 'normal'},{name: 'EVT', type: 'done'},
+    {name: 'DVT1', type: 'normal'},{name: 'DVT2', type: 'normal'},{name: 'DVT2 Exit', type: 'normal'},
+    {name: 'PVT', type: 'normal'},{name: 'PVT Exit', type: 'normal'},{name: 'SW CF', type: 'normal'},
+    {name: 'LE', type: 'normal'},{name: '1st TA', type: 'normal'},{name: 'OK2 Pilot', type: 'normal'},
+    {name: 'OK2 Ramp', type: 'normal'},{name: 'OK2S', type: 'normal'}
+  ];
+
+  const today = new Date().toISOString().split('T')[0];
+  const getNextDate = (baseDate, days) => {
+    const d = new Date(baseDate); d.setDate(d.getDate() + days);
+    return d.toISOString().split('T')[0];
+  };
+
+  const planDates = [], cwvDates = [];
+  for(let i=0; i<defaultMilestones.length; i++){
+    planDates.push(getNextDate(today, i*7));
+    cwvDates.push(getNextDate(today, i*7 + 3));
+  }
+
+  const initFlows = [
+    {name: 'Plan', dates: planDates},
+    {name: 'CWV', dates: cwvDates}
+  ];
+
+  defaultMilestones.forEach(ms => {
+    const nameTh = document.createElement('th');
+    nameTh.contentEditable = true;
+    nameTh.textContent = ms.name;
+    nameTh.className = 'ms-name-col';
+    theadTr1.appendChild(nameTh);
+
+    const typeTh = document.createElement('th');
+    typeTh.className = 'ms-type-col';
+    typeTh.innerHTML = `
+      <select style="width:100%;padding:2px;">
+        <option value="normal" ${ms.type==='normal'?'selected':''}>蓝色</option>
+        <option value="done" ${ms.type==='done'?'selected':''}>绿色</option>
+        <option value="ecn" ${ms.type==='ecn'?'selected':''}>粉色</option>
+      </select>
+    `;
+    theadTr2.appendChild(typeTh);
+  });
+
+  initFlows.forEach(flow => {
+    const tr = document.createElement('tr'); tr.className = 'flow-row';
+    const flowTd = document.createElement('td');
+    flowTd.contentEditable = true;
+    flowTd.textContent = flow.name;
+    flowTd.className = 'flow-name-td';
+    tr.appendChild(flowTd);
+
+    flow.dates.forEach(date => {
+      const dateTd = document.createElement('td');
+      dateTd.className = 'date-td';
+      dateTd.contentEditable = true;
+      dateTd.textContent = date;
+      tr.appendChild(dateTd);
+    });
+    tbody.appendChild(tr);
+  });
+
+  initEChart();
+  setChartDynamicHeight();
+  renderGantt();
+}
+
+function getNextDate(baseDate, days) {
+  const d = new Date(baseDate); d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
+
+function addMilestoneCol() {
+  const mainTable = document.getElementById('mainTable');
+  const theadTr1 = mainTable.querySelector('thead tr:first-child');
+  const theadTr2 = mainTable.querySelector('thead tr:last-child');
+  const flowRows = mainTable.querySelectorAll('.flow-row');
+
+  const nameTh = document.createElement('th');
+  nameTh.contentEditable = true;
+  nameTh.textContent = '新里程碑';
+  nameTh.className = 'ms-name-col';
+  theadTr1.appendChild(nameTh);
+
+  const typeTh = document.createElement('th');
+  typeTh.className = 'ms-type-col';
+  typeTh.innerHTML = `
+    <select style="width:100%;padding:2px;">
+      <option value="normal">蓝色</option><option value="done">绿色</option><option value="ecn">粉色</option>
+    </select>
+  `;
+  theadTr2.appendChild(typeTh);
+
+  flowRows.forEach(row => {
+    const dateTds = row.querySelectorAll('.date-td');
+    const lastDate = dateTds[dateTds.length-1].textContent.trim() || new Date().toISOString().split('T')[0];
+    const newDate = getNextDate(lastDate, 7);
+    const dateTd = document.createElement('td');
+    dateTd.className = 'date-td';
+    dateTd.contentEditable = true;
+    dateTd.textContent = newDate;
+    row.appendChild(dateTd);
+  });
+}
+
+function deleteMilestoneCol() {
+  const mainTable = document.getElementById('mainTable');
+  const msNameCols = mainTable.querySelectorAll('.ms-name-col');
+  if (msNameCols.length <= 1) return alert('至少保留1列里程碑');
+  msNameCols[msNameCols.length-1].remove();
+  const msTypeCols = mainTable.querySelectorAll('.ms-type-col');
+  msTypeCols[msTypeCols.length-1].remove();
+  const flowRows = mainTable.querySelectorAll('.flow-row');
+  flowRows.forEach(row => {
+    const dateTds = row.querySelectorAll('.date-td');
+    dateTds[dateTds.length-1].remove();
+  });
+}
+
+function addFlowRow() {
+  const mainTable = document.getElementById('mainTable');
+  const tbody = mainTable.querySelector('tbody');
+  const msNameCols = mainTable.querySelectorAll('.ms-name-col');
+
+  const tr = document.createElement('tr'); tr.className = 'flow-row';
+  const flowTd = document.createElement('td');
+  flowTd.contentEditable = true;
+  flowTd.textContent = `新流程${tbody.children.length + 1}`;
+  flowTd.className = 'flow-name-td';
+  tr.appendChild(flowTd);
+
+  const planRow = tbody.querySelector('.flow-row:first-child');
+  const planDateTds = planRow ? planRow.querySelectorAll('.date-td') : [];
+
+  msNameCols.forEach((_, idx) => {
+    const baseDate = planDateTds[idx] ? planDateTds[idx].textContent : new Date().toISOString().split('T')[0];
+    const newDate = getNextDate(baseDate, 5);
+    const dateTd = document.createElement('td');
+    dateTd.className = 'date-td';
+    dateTd.contentEditable = true;
+    dateTd.textContent = newDate;
+    tr.appendChild(dateTd);
+  });
+
+  tbody.appendChild(tr);
+  setChartDynamicHeight();
+  renderGantt();
+}
+
+function deleteFlowRow() {
+  const mainTable = document.getElementById('mainTable');
+  const flowRows = mainTable.querySelectorAll('.flow-row');
+  if (flowRows.length <= 1) return alert('至少保留1行流程');
+  flowRows[flowRows.length-1].remove();
+  setChartDynamicHeight();
+  renderGantt();
+}
+
+function renderGantt() {
+  const chart = initEChart();
+  const mainTable = document.getElementById('mainTable');
+  const msNameCols = mainTable.querySelectorAll('.ms-name-col');
+  const msTypeCols = mainTable.querySelectorAll('.ms-type-col');
+  const flowRows = mainTable.querySelectorAll('.flow-row');
+
+  const allNodes = [], allDates = [], flows = [];
+  const reversedFlowRows = Array.from(flowRows).reverse();
+
+  reversedFlowRows.forEach((row, flowIdx) => {
+    const flowName = row.querySelector('.flow-name-td').textContent.trim() || `流程${flowIdx+1}`;
+    flows.push(flowName);
+    const dateTds = row.querySelectorAll('.date-td');
+    dateTds.forEach((td, msIdx) => {
+      const dateStr = td.textContent.trim();
+      if (!dateStr) return;
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) return;
+      const msName = msNameCols[msIdx].textContent.trim() || `里程碑${msIdx+1}`;
+      const msType = msTypeCols[msIdx].querySelector('select').value;
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const shortDate = `${month}-${day}`;
+      allNodes.push({ flow: flowName, msName: msName, date: date, dateStr: dateStr, shortDate: shortDate, type: msType });
+      allDates.push(date);
+    });
+  });
+
+  if (allNodes.length === 0) return alert('请填写有效日期！');
+  const minDate = new Date(Math.min(...allDates)); minDate.setDate(minDate.getDate() - 7);
+  const maxDate = new Date(Math.max(...allDates)); maxDate.setDate(maxDate.getDate() + 7);
+
+  const option = {
+    backgroundColor: 'white',
+    tooltip: { trigger: 'item', formatter: p => `${p.data.msName}<br>流程：${p.data.flow}<br>日期：${p.data.shortDate}<br>类型：${p.data.type}` },
+    grid: { left: 120, right: 40, top: 40, bottom: 60 },
+    xAxis: { type: 'time', min: minDate, max: maxDate, axisLabel: { show: false }, axisLine: { show: false }, splitLine: { show: false }, axisTick: { show: false } },
+    yAxis: { type: 'category', data: flows, axisLabel: { fontSize: 12 }, interval: 0.8, axisLine: { lineStyle: { width: 0 } }, axisTick: { length: 0 } },
+    series: [
+      { type: 'line', symbol: 'none', lineStyle: { color: '#aaa', width: 1, type: 'dashed' },
+        data: flows.map(f => ({ name: f, value: [maxDate, f] })),
+        markLine: { silent: true, data: flows.map(f => ({ yAxis: f })), lineStyle: { color: '#aaa', width: 1, type: 'dashed' } }, z: 0 },
+      { type: 'scatter', symbol: 'diamond', symbolSize: 24,
+        label: { show: true, position: 'top', fontSize: 12, formatter: p => `${p.data.msName}\n${p.data.shortDate}` },
+        itemStyle: {
+          color: p => {
+            const t = p.data.type;
+            if (t === 'done') return '#00b050';
+            if (t === 'ecn') return '#ff0080';
+            return '#0070c0';
+          }
+        },
+        data: allNodes.map(n => ({ name: n.msName, value: [n.date, n.flow], ...n })),
+        emphasis: {
+          itemStyle: {
+            color: p => {
+              const t = p.data.type;
+              if (t === 'done') return '#00d060';
+              if (t === 'ecn') return '#ff2090';
+              return '#0080d0';
+            },
+            shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.2)'
+          }
+        }
+      }
+    ]
+  };
+  chart.setOption(option);
+}
+
+async function exportAsImage() {
+  try {
+    const exportRange = document.getElementById('exportRange').value;
+    const exportFormat = document.getElementById('exportFormat').value;
+    const exportQuality = 1.0;
+    const chart = initEChart();
+
+    if (exportRange === 'chart') {
+      const imgData = chart.getDataURL({
+        type: exportFormat, quality: exportQuality, pixelRatio: 2, backgroundColor: 'white'
+      });
+      const link = document.createElement('a');
+      link.download = `甘特图_${new Date().getTime()}.${exportFormat}`;
+      link.href = imgData;
+      link.click();
+    } else if (exportRange === 'both') {
+      const tempContainer = document.getElementById('exportTempContainer');
+      tempContainer.innerHTML = '';
+
+      const tableClone = document.getElementById('mainTable').cloneNode(true);
+      tempContainer.appendChild(tableClone);
+      tempContainer.appendChild(document.createElement('br'));
+
+      const chartContainer = document.getElementById('chart');
+      const chartClone = document.createElement('div');
+      chartClone.style.width = '90%';
+      chartClone.style.height = chartContainer.style.height;
+      chartClone.style.background = 'white';
+      tempContainer.appendChild(chartClone);
+
+      const tempChart = echarts.init(chartClone, null, { backgroundColor: 'white' });
+      tempChart.setOption(chart.getOption(), true);
+      tempChart.resize();
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      const canvas = await html2canvas(tempContainer, {
+        scale: 2, useCORS: true, allowTaint: true, backgroundColor: 'white', logging: false
+      });
+
+      const imgData = canvas.toDataURL(`image/${exportFormat}`, exportQuality);
+      const link = document.createElement('a');
+      link.download = `表格+甘特图_${new Date().getTime()}.${exportFormat}`;
+      link.href = imgData;
+      link.click();
+
+      tempChart.dispose();
+      tempContainer.innerHTML = '';
+    }
+    alert('导出成功！');
+    renderGantt();
+  } catch (error) {
+    console.error('导出失败：', error);
+    alert(`导出失败：${error.message}`);
+    renderGantt();
+  }
+}
+
+window.addEventListener('resize', () => { if (myChart) myChart.resize(); });
+window.addEventListener('unload', () => { if (myChart) myChart.dispose(); });
+window.onload = initTable;
+</script>
+</body>
+</html>
